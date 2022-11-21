@@ -1,0 +1,26 @@
+parameters:
+- name: subscriptionId
+  displayName: Subscription
+  type: string
+  default: '75b52ee1-aa3a-477f-87e7-2c2b873ee266'
+
+trigger:
+- manual
+
+pool:
+  vmImage: ubuntu-latest
+stages:
+- stage: Configure
+  jobs:  
+  - template: azure-pipeline-template/set-auth-ip-job.yml
+    parameters:
+      environment: dev
+
+  - template: azure-pipeline-template/set-auth-ip-job.yml
+    parameters:
+      environment: stage
+
+  - template: azure-pipeline-template/set-auth-ip-job.yml
+    parameters:
+      environment: prod
+      subscriptionId: '6da71d61-de94-4646-85be-dffafb2161a5'

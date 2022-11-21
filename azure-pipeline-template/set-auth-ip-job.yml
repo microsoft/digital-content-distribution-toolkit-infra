@@ -1,0 +1,22 @@
+parameters:
+- name: subscriptionId
+  displayName: Subscription
+  type: string
+  default: '75b52ee1-aa3a-477f-87e7-2c2b873ee266'
+
+- name: environment
+  displayName: Environment
+  type: string
+  default: dev
+
+jobs:  
+- job: Set_authorised_ip_${{ parameters.environment }}
+  steps:
+  - task: AzureCLI@2
+    displayName: Setting authorised IP
+    inputs:
+      azureSubscription: '${{ parameters.subscriptionId }}'
+      scriptType: bash
+      scriptLocation: scriptPath
+      scriptPath: 'scripts/set-authorized-ip-ranges.sh'
+      arguments: '--env ${{ parameters.environment }}'

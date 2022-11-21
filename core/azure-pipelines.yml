@@ -1,0 +1,266 @@
+parameters:
+- name: onlyDeploy
+  displayName: Only Deploy (Resource Group already exists)
+  default: true
+  type: boolean
+
+- name: subscriptionId
+  displayName: Subscription
+  type: string
+  default: '75b52ee1-aa3a-477f-87e7-2c2b873ee266'
+
+- name: region
+  displayName: Region (centralindia/ japaneast)
+  type: string
+  default: 'centralindia'
+
+- name: importVnet
+  displayName: Import existing VNET in terraform statefile? (Only for the first time when RG is created)
+  default: true
+  type: boolean
+
+- name: configureAKS
+  displayName: Attach AKS pod identity role to new AKS cluster? (Only for the first time)
+  default: true
+  type: boolean
+
+- name: configureAMS
+  displayName: Create AMS service principal? (Only for the first time)
+  default: true
+  type: boolean
+
+- name: environment
+  displayName: Environment
+  type: string
+  default: stage
+
+- name: kubernetes_version
+  displayName: Kubernetes Version
+  type: string
+  default: latest
+
+- name: aks_os_sku
+  displayName: AKS OS SKU
+  type: string
+  default: CBLMariner
+
+- name: virtual_network_name
+  displayName: VNET Name (always required)
+  type: string
+  default: vnet-blendnet-stage
+
+- name: virtual_network_resource_group 
+  displayName: VNET resource group (always required)
+  type: string
+  default: blendnet-stage
+
+- name: virtual_network_address_prefix
+  displayName: VNET address prefix (always required)
+  type: string
+  default: "172.20.0.0/16"
+
+- name: default_subnet_address_prefix
+  displayName: DEFAULT subnet address prefix (always required)
+  type: string
+  default: "172.20.0.0/24"
+
+- name: aks_subnet_address_prefix
+  displayName: AKS subnet address prefix (always required)
+  type: string
+  default: "172.20.64.0/21"
+
+- name: agw_subnet_address_prefix
+  displayName: AGW subnet address prefix (always required)
+  type: string
+  default: "172.20.2.0/24"
+
+- name: aks_sys_agent_count
+  displayName: aks system node pool count
+  type: string
+  default: "3"
+
+- name: aks_sys_agent_vm_size
+  displayName: aks system node pool agent vm size
+  type: string
+  default: "Standard_D8s_v4"
+
+- name: aks_app_agent_count
+  displayName: aks application node pool count
+  type: string
+  default: "5"
+
+- name: aks_app_agent_vm_size
+  displayName: aks application node pool agent vm size
+  type: string
+  default: "Standard_D16s_v4"
+
+- name: ams_streaming_endpoint_cdn_enabled
+  displayName: "ams streaming endpoint cdn enabled"
+  type: string
+  default: true
+  values:
+    - true
+    - false
+
+- name: ams_streaming_endpoint_scale_units
+  displayName: "ams streaming endpoint scale units"
+  type: string
+  default: "3"
+
+- name: ams_account_name
+  displayName: "AMS account name"
+  type: string
+  default: "amsnearmestage"
+
+- name: analytics_rg_name
+  displayName: "Analytics resource group name"
+  type: string
+  default: "NearMeAnalyticsPipeline"
+
+trigger:
+- manual
+
+pool:
+  vmImage: ubuntu-latest
+stages:
+- stage: Init
+  condition: eq('${{ parameters.onlyDeploy }}', false)
+  jobs:
+  - job: Init
+    steps:
+    - task: AzureCLI@2
+      displayName: Initializing environment
+      inputs:
+        azureSubscription: '${{ parameters.subscriptionId }}'
+        scriptType: 'bash'
+        scriptLocation: 'scriptPath'
+        scriptPath: 'scripts/init.sh'
+        arguments: '--env ${{ parameters.environment }} --region ${{ parameters.region }}'
+    
+    - task: AzureCLI@2
+      displayName: Initializing environment
+      inputs:
+        azureSubscription: '${{ parameters.subscriptionId }}'
+        scriptType: 'bash'
+        scriptLocation: 'scriptPath'
+        scriptPath: 'scripts/aks-ssh-create.sh'
+        arguments: '--env ${{ parameters.environment }} --region ${{ parameters.region }}'
+    
+    - task: charleszipp.azure-pipelines-tasks-terraform.azure-pipelines-tasks-terraform-installer.TerraformInstaller@0
+      displayName: Installing Terraform 
+      inputs:
+        terraformVersion: '0.14.11'
+
+    - task: TerraformCLI@0
+      condition: eq('${{ parameters.importVnet }}', true)
+      displayName: Terraform Init
+      inputs:
+        workingDirectory: core/
+        command: 'init'
+        backendType: 'azurerm'
+        backendServiceArm: '${{ parameters.subscriptionId }}'
+        backendAzureRmResourceGroupName: 'blendnet-${{ parameters.environment }}'
+        backendAzureRmStorageAccountName: 'tfstatefor${{ parameters.environment }}'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'terraform.tfstate'
+        allowTelemetryCollection: false
+
+    - task: TerraformCLI@0
+      condition: eq('${{ parameters.importVnet }}', true)
+      displayName: Terraform import vnet
+      inputs:
+        workingDirectory: core/
+        command: 'import'
+        environmentServiceName: '${{ parameters.subscriptionId }}'
+        allowTelemetryCollection: false
+        resourceAddress: 'azurerm_virtual_network.vnet'
+        resourceId: '/subscriptions/${{ parameters.subscriptionId }}/resourceGroups/${{ parameters.virtual_network_resource_group }}/providers/Microsoft.Network/virtualNetworks/${{ parameters.virtual_network_name }}'
+    
+    - task: TerraformCLI@0
+      condition: eq('${{ parameters.importVnet }}', true)
+      displayName: Terraform import subnet default 
+      inputs:
+        workingDirectory: core/
+        command: 'import'
+        environmentServiceName: '${{ parameters.subscriptionId }}'
+        allowTelemetryCollection: false
+        resourceAddress: 'azurerm_subnet.default'
+        resourceId: '/subscriptions/${{ parameters.subscriptionId }}/resourceGroups/${{ parameters.virtual_network_resource_group }}/providers/Microsoft.Network/virtualNetworks/${{ parameters.virtual_network_name }}/subnets/default'
+
+- stage: Deploy
+  dependsOn: Init
+  condition: or(succeeded(), eq('${{ parameters.onlyDeploy }}', true))
+  jobs:
+  - job: Deploy
+    timeoutInMinutes: 120
+    steps:
+    - task: ms-devlabs.custom-terraform-tasks.custom-terraform-installer-task.TerraformInstaller@0
+      displayName: Installing Terraform 
+      inputs:
+        terraformVersion: '0.14.11'
+
+    - task: TerraformTaskV1@0
+      displayName: Terraform Init
+      inputs:
+        workingDirectory: core/
+        provider: 'azurerm'
+        command: 'init'
+        backendServiceArm: '${{ parameters.subscriptionId }}'
+        backendAzureRmResourceGroupName: 'blendnet-${{ parameters.environment }}'
+        backendAzureRmStorageAccountName: 'tfstatefor${{ parameters.environment }}'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'terraform.tfstate'
+
+    - task: TerraformTaskV1@0
+      displayName: Terraform plan
+      inputs:
+        workingDirectory: core/
+        provider: 'azurerm'
+        command: 'plan'
+        environmentServiceNameAzureRM: '${{ parameters.subscriptionId }}'
+        commandOptions: '-var="subscription_name=${{ parameters.subscriptionId }}" -var="environment=${{ parameters.environment }}"  -var="default_subnet_address_prefix=${{ parameters.default_subnet_address_prefix }}" 
+        -var="aks_subnet_address_prefix=${{ parameters.aks_subnet_address_prefix }}" -var="agw_subnet_address_prefix=${{ parameters.agw_subnet_address_prefix }}" -var="aks_sys_agent_count=${{ parameters.aks_sys_agent_count }}" 
+        -var="aks_sys_agent_vm_size=${{ parameters.aks_sys_agent_vm_size }}" -var="aks_app_agent_count=${{ parameters.aks_app_agent_count }}" -var="aks_app_agent_vm_size=${{ parameters.aks_app_agent_vm_size }}" 
+        -var="ams_streaming_endpoint_cdn_enabled=${{ parameters.ams_streaming_endpoint_cdn_enabled }}"  -var="ams_streaming_endpoint_scale_units=${{ parameters.ams_streaming_endpoint_scale_units }}" 
+        -var="virtual_network_name=${{ parameters.virtual_network_name }}" -var="virtual_network_resource_group=${{ parameters.virtual_network_resource_group }}" -var="virtual_network_address_prefix=${{ parameters.virtual_network_address_prefix }}"
+        -var="kubernetes_version=${{ parameters.kubernetes_version }}" -var="aks_os_sku=${{ parameters.aks_os_sku }}" -var="ams_account_name=${{ parameters.ams_account_name }}" -var="analytics_rg_name=${{ parameters.analytics_rg_name }}"'
+
+    - task: TerraformTaskV1@0
+      displayName: Terraform validate and apply
+      inputs:
+        workingDirectory: core/
+        provider: 'azurerm'
+        command: 'apply'
+        environmentServiceNameAzureRM: '${{ parameters.subscriptionId }}'
+        commandOptions: '-var="subscription_name=${{ parameters.subscriptionId }}" -var="environment=${{ parameters.environment }}"  -var="default_subnet_address_prefix=${{ parameters.default_subnet_address_prefix }}" 
+        -var="aks_subnet_address_prefix=${{ parameters.aks_subnet_address_prefix }}" -var="agw_subnet_address_prefix=${{ parameters.agw_subnet_address_prefix }}" -var="aks_sys_agent_count=${{ parameters.aks_sys_agent_count }}" 
+        -var="aks_sys_agent_vm_size=${{ parameters.aks_sys_agent_vm_size }}" -var="aks_app_agent_count=${{ parameters.aks_app_agent_count }}" -var="aks_app_agent_vm_size=${{ parameters.aks_app_agent_vm_size }}" 
+        -var="ams_streaming_endpoint_cdn_enabled=${{ parameters.ams_streaming_endpoint_cdn_enabled }}"  -var="ams_streaming_endpoint_scale_units=${{ parameters.ams_streaming_endpoint_scale_units }}" 
+        -var="virtual_network_name=${{ parameters.virtual_network_name }}" -var="virtual_network_resource_group=${{ parameters.virtual_network_resource_group }}" -var="virtual_network_address_prefix=${{ parameters.virtual_network_address_prefix }}"
+        -var="kubernetes_version=${{ parameters.kubernetes_version }}" -var="aks_os_sku=${{ parameters.aks_os_sku }}" -var="ams_account_name=${{ parameters.ams_account_name }}" -var="analytics_rg_name=${{ parameters.analytics_rg_name }}"'
+
+- stage: Configure
+  dependsOn: Deploy
+  condition:  in(dependencies.Deploy.result, 'Succeeded')
+  jobs:
+  - job: Configure
+    steps:
+    - task: AzureCLI@2
+      displayName: Configuring AKS
+      condition: eq('${{ parameters.configureAKS }}', true)
+      inputs:
+        azureSubscription: '${{ parameters.subscriptionId }}'
+        scriptType: 'bash'
+        scriptLocation: 'scriptPath'
+        scriptPath: 'scripts/aks-configuration.sh'
+        arguments: '--environment ${{ parameters.environment }} --subscription ${{ parameters.subscriptionId }}'
+
+    - task: AzureCLI@2
+      displayName: Configuring AMS
+      condition: eq('${{ parameters.configureAMS }}', true)
+      inputs:
+        azureSubscription: '${{ parameters.subscriptionId }}'
+        scriptType: 'bash'
+        scriptLocation: 'scriptPath'
+        scriptPath: 'scripts/ams-configuration.sh'
+        arguments: '${{ parameters.environment }} ${{ parameters.ams_account_name }}'

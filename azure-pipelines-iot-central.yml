@@ -1,0 +1,57 @@
+parameters:
+
+- name: subscriptionId
+  displayName: Subscription
+  type: string
+  default: '75b52ee1-aa3a-477f-87e7-2c2b873ee266'
+
+- name: environment
+  displayName: Environment
+  type: string
+  default: stage
+
+- name: genToken
+  displayName: Generate API token for iot central app (only once)
+  default: false
+  type: boolean
+
+- name: shouldAddUser
+  displayName: Add to user (provide email address) to iot central
+  default: false
+  type: boolean
+
+- name: email
+  displayName: Email address
+  type: string
+
+trigger:
+- manual
+
+pool:
+  vmImage: ubuntu-latest
+stages:
+- stage: Configure
+  jobs:
+  - job: AddUser
+    steps:
+    - task: AzureCLI@2
+      displayName: Add user to iot central app
+      condition: eq('${{ parameters.shouldAddUser }}', true)
+      inputs:
+        azureSubscription: '${{ parameters.subscriptionId }}'
+        scriptType: 'bash'
+        scriptLocation: 'scriptPath'
+        scriptPath: 'scripts/iot-central-add-user.sh'
+        arguments: '--env ${{ parameters.environment }} --userEmail ${{ parameters.email }}'
+  
+  - job: GenToken
+    steps:
+    - task: AzureCLI@2
+      displayName: Generate iot central API token
+      condition: eq('${{ parameters.genToken }}', true)
+      inputs:
+        azureSubscription: '${{ parameters.subscriptionId }}'
+        scriptType: 'bash'
+        scriptLocation: 'scriptPath'
+        scriptPath: 'scripts/iot-central-gen-token.sh'
+        arguments: '--env ${{ parameters.environment }}'

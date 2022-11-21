@@ -1,0 +1,90 @@
+parameters:
+
+- name: onlyDeploy
+  displayName: Only Deploy (Resource Group already exists)
+  default: true
+  type: boolean
+
+- name: subscriptionId
+  displayName: Subscription
+  type: string
+  default: '75b52ee1-aa3a-477f-87e7-2c2b873ee266'
+
+- name: region
+  displayName: Region (centralindia/ japaneast)
+  type: string
+  default: 'centralindia'
+
+- name: rgName
+  displayName: Resource group name
+  type: string
+  default: nearme-analytics
+
+- name: adminLoginName
+  displayName: MS SQL Admin Login Name
+  type: string
+  default: NearMeUser
+
+- name: adminLoginPasswd
+  displayName: MS SQL Admin Login Password
+  type: string
+
+trigger:
+- manual
+
+pool:
+  vmImage: ubuntu-latest
+stages:
+  - stage: Init
+    condition: eq('${{ parameters.onlyDeploy }}', false)
+    jobs:
+    - job: Init
+      steps:
+      - task: AzureCLI@2
+        displayName: Initializing environment
+        inputs:
+          azureSubscription: '${{ parameters.subscriptionId }}'
+          scriptType: 'bash'
+          scriptLocation: 'scriptPath'
+          scriptPath: 'scripts/init.sh'
+          arguments: '--env analytics --region ${{ parameters.region }} --rg ${{ parameters.rgName }}'
+
+  - stage: Deploy
+    jobs:
+    - job: Deploy
+      timeoutInMinutes: 120
+      steps:
+      - task: ms-devlabs.custom-terraform-tasks.custom-terraform-installer-task.TerraformInstaller@0
+        displayName: Installing Terraform 
+        inputs:
+          terraformVersion: 'latest'
+
+      - task: TerraformTaskV1@0
+        displayName: Terraform Init
+        inputs:
+          workingDirectory: analytics/
+          provider: 'azurerm'
+          command: 'init'
+          backendServiceArm: '${{ parameters.subscriptionId }}'
+          backendAzureRmResourceGroupName: '${{ parameters.rgName }}'
+          backendAzureRmStorageAccountName: 'tfstateforanalytics'
+          backendAzureRmContainerName: 'tfstate'
+          backendAzureRmKey: 'terraform.tfstate'
+
+      - task: TerraformTaskV1@0
+        displayName: Terraform plan
+        inputs:
+          workingDirectory: analytics/
+          provider: 'azurerm'
+          command: 'plan'
+          environmentServiceNameAzureRM: '${{ parameters.subscriptionId }}'
+          commandOptions: '-var="subscription_name=${{ parameters.subscriptionId }}" -var="rg_name=${{ parameters.rgName }}" -var="mssql_admin_login_name"=${{ parameters.adminLoginName }}" -var="mssql_admin_login_password=${{ parameters.adminLoginPasswd }}"'
+
+      - task: TerraformTaskV1@0
+        displayName: Terraform validate and apply
+        inputs:
+          workingDirectory: analytics/
+          provider: 'azurerm'
+          command: 'apply'
+          environmentServiceNameAzureRM: '${{ parameters.subscriptionId }}'
+          commandOptions: '-var="subscription_name=${{ parameters.subscriptionId }}" -var="rg_name=${{ parameters.rgName }}" -var="mssql_admin_login_name"=${{ parameters.adminLoginName }}" -var="mssql_admin_login_password=${{ parameters.adminLoginPasswd }}"'
